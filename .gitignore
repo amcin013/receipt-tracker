@@ -1,0 +1,8 @@
+# clasp (Apps Script CLI) per-user files: script ID and login tokens
+.clasp.json
+.clasprc.json
+
+# Node / editor clutter
+node_modules/
+.DS_Store
+*.swp
