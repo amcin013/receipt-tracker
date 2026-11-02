@@ -38,7 +38,7 @@ Everything runs under your **personal Google account**, not LHI's Workspace. Tha
 - LHI admins can't see your household purchases.
 - LHI still gets what it needs: each reimbursement email carries the receipts as attachments.
 
-Reimbursement emails go out from your personal Gmail unless you set **Send From Alias** (see Settings below).
+Reimbursement emails go from your personal Gmail to your LHI inbox, and you forward them from there (see "How reimbursement emails reach LHI" below).
 
 ### Drive layout (created by setup)
 
@@ -90,9 +90,9 @@ My Drive/
 | Key | Default | Notes |
 |---|---|---|
 | Your Name | | Signs reimbursement emails |
-| Reimbursement Email To | | Required for Work reimbursement |
+| Reimbursement Email To | | Required for Work reimbursement. Usually your own LHI address |
 | Reimbursement Email CC | | Optional, e.g. your LHI address |
-| Send From Alias | | Optional. To send as your LHI address, first add it in Gmail > Settings > Accounts > "Send mail as". The script checks it's verified before sending |
+| Send From Alias | | Optional, normally blank. See "How reimbursement emails reach LHI" |
 | Subject Prefix | Expense Reimbursement Request | |
 | Send Mode | Draft | Draft = review in Gmail first; Send = send immediately |
 | Require Business Purpose | Yes | Blocks Work submission if Purpose is blank |
@@ -100,17 +100,19 @@ My Drive/
 | Keep Original Copies | Yes | No = skip the Originals archive |
 | Gemini Model | gemini-flash-latest | |
 
-### Sending reimbursement emails as your LHI address
+### How reimbursement emails reach LHI
 
-Do this once so reimbursement emails come from your LHI address while the script runs in your personal account:
+The recommended setup is to send to yourself and forward:
 
-1. In **personal Gmail** (desktop): **Settings (gear) > See all settings > Accounts and Import > Send mail as > Add another email address**.
-2. Enter your name and your LHI address. Leave **Treat as an alias** checked. Click **Next Step**.
-3. If Gmail asks for SMTP details, use **smtp.gmail.com**, port **587**, TLS. The username is your full LHI address. The password is an **app password** for the LHI account (myaccount.google.com > Security > App passwords while signed in to LHI; this needs 2-Step Verification on). If app passwords are missing, LHI's Workspace admin has turned them off, so ask IT, or leave the alias blank and send from your personal address.
-4. Gmail emails a confirmation code to your LHI inbox. Click the link or enter the code.
-5. On the **Settings** tab of the sheet, put your LHI address in **Send From Alias**. Leave **Send Mode** on **Draft** for the first one and check the From line in the draft.
+| Setting | Value |
+|---|---|
+| Reimbursement Email To | your LHI address |
+| Send From Alias | blank |
+| Send Mode | Send |
 
-The script refuses to send if the alias isn't verified, so a typo can't send from the wrong address.
+The script emails the batch from your personal Gmail to your LHI inbox. From there you forward it, or copy it into a new email and edit it, to whoever approves expenses. Rows are stamped **Submitted** when the script sends it to your LHI inbox, so if you decide not to forward a batch, run **Work: Undo a reimbursement batch** with the Batch ID at the bottom of the email.
+
+**Optional: sending directly as your LHI address.** You can add the LHI address as a Gmail "Send mail as" alias (personal Gmail > Settings > Accounts and Import > Send mail as). If Gmail asks for SMTP details, use smtp.gmail.com, port 587, and an **app password** created while signed in to the LHI account; your regular password is rejected. Workspace admins often turn app passwords off. Once the alias is verified, put the address in **Send From Alias**. The script refuses to send if the alias isn't verified.
 
 ### Privacy note
 
@@ -235,5 +237,6 @@ The Home Expenses tab is a plain table (one row per receipt, fixed headers), so 
 
 ## Changelog
 
+- **2026-11-02**: v2.0.1 (docs). Default workflow is now: email the batch to your own LHI inbox, then forward it. The alias is optional.
 - **2026-11-02**: v2.0. Separate Work and Home books (own Inbox, folders, tabs, categories, and ID series), with the Inbox deciding the book. Untouched originals archived per book. Runs from your personal Google account. Duplicate check spans both books. Optional Send From Alias for reimbursement emails. Each row is now written before its file is moved; a file seen again is filed by its existing row's book and status, and a file already recorded in the other book is surfaced in Needs Attention instead of filed silently. Extraction notes are guarded against formula injection.
 - **2026-10-30**: v1.0. Initial build: Drive inbox processing, Gemini extraction, budget summary, reimbursement email batching.
