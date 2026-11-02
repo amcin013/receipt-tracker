@@ -264,14 +264,13 @@ function ensureCategoriesSheet_(book) {
     sh.setFrozenRows(1);
     cols.forEach((c, i) => sh.setColumnWidth(i + 1, c.width));
   }
-  const idx = key => cols.findIndex(c => c.key === key) + 1;
-  if (idx('type')) {
-    const L = colLetter_(idx('type'));
+  if (catCol_(book, 'type')) {
+    const L = colLetter_(catCol_(book, 'type'));
     sh.getRange(L + '2:' + L).setDataValidation(SpreadsheetApp.newDataValidation()
       .requireValueInList([TYPES.REIMBURSABLE, TYPES.TRACK_ONLY], true).build());
   }
-  if (idx('budget')) {
-    const L = colLetter_(idx('budget'));
+  if (catCol_(book, 'budget')) {
+    const L = colLetter_(catCol_(book, 'budget'));
     sh.getRange(L + '2:' + L).setNumberFormat('$#,##0.00');
   }
 }
@@ -411,7 +410,7 @@ function buildSummarySheet_() {
     : [];
 
   // Budget column position on the Categories tab, looked up by key
-  const budgetIdx = book.categoryColumns.findIndex(c => c.key === 'budget') + 1;
+  const budgetIdx = catCol_(book, 'budget');
   const C = "'" + book.categoriesSheet + "'!A:" + colLetter_(budgetIdx);
   const rows = cats.map((c, i) => {
     const r = startRow + 1 + i;

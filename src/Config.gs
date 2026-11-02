@@ -114,6 +114,17 @@ function hasCol_(book, key) {
 }
 
 /**
+ * Returns the 1-based column number for a key on a book's Categories tab,
+ * or 0 if that book's Categories tab has no such column.
+ * @param {Object} book
+ * @param {string} key - key from book.categoryColumns
+ * @return {number}
+ */
+function catCol_(book, key) {
+  return book.categoryColumns.findIndex(c => c.key === key) + 1;
+}
+
+/**
  * Converts a column number to its A1 letter (1 -> A, 27 -> AA).
  * @param {number} n
  * @return {string}

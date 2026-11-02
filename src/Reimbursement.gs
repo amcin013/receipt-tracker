@@ -47,7 +47,9 @@ function prepareReimbursement() {
   // Gmail only lets a script send "from" an address already verified under
   // Gmail > Settings > Accounts > "Send mail as". Check before building anything.
   if (fromAlias) {
-    const aliases = GmailApp.getAliases().map(a => a.toLowerCase());
+    // getAliases() leaves out the account's own address, so add it explicitly
+    const aliases = GmailApp.getAliases().concat([Session.getEffectiveUser().getEmail()])
+      .map(a => String(a).toLowerCase());
     if (aliases.indexOf(fromAlias.toLowerCase()) < 0) {
       ui.alert('Send From Alias not set up',
         `"${fromAlias}" is not a verified "Send mail as" address in this Gmail account.\n\n` +

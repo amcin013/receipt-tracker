@@ -113,12 +113,15 @@ function processInboxFromMenu() {
  * Loads each book's sheet and categories, plus an index of every recorded
  * file and receipt across BOTH books, so a receipt scanned into the wrong
  * inbox (or into both) is flagged as a possible duplicate.
+ * `files` maps each recorded Drive file ID to the book, receipt ID, and
+ * status of its row, so a file seen again can be routed correctly.
  * @return {{books: Object<string, {sheet: Sheet, categories: Object[]}>,
- *           fileIds: Set<string>, dupKeys: Object<string, string>}}
+ *           files: Map<string, {book: string, id: string, status: string}>,
+ *           dupKeys: Object<string, string>}}
  */
 function buildContext_() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const ctx = { books: {}, fileIds: new Set(), dupKeys: {} };
+  const ctx = { books: {}, files: new Map(), dupKeys: {} };
 
   getBooks_().forEach(book => {
     const catSheet = ss.getSheetByName(book.categoriesSheet);
@@ -131,7 +134,7 @@ function buildContext_() {
       const data = expSheet.getRange(2, 1, expSheet.getLastRow() - 1, book.columns.length).getValues();
       data.forEach(r => {
         const v = rowToObject_(book, r);
-        if (v.fileId) ctx.fileIds.add(String(v.fileId));
+        if (v.fileId) ctx.files.set(String(v.fileId), { book: book.key, id: v.id, status: v.status });
         const key = dupKey_(v.vendor, v.date, v.total);
         if (key) ctx.dupKeys[key] = v.id;
       });
@@ -149,8 +152,7 @@ function buildContext_() {
  */
 function loadCategories_(book, sh) {
   const cols = book.categoryColumns;
-  const idx = key => cols.findIndex(c => c.key === key);
-  const iType = idx('type'), iDesc = idx('description');
+  const iType = catCol_(book, 'type') - 1, iDesc = catCol_(book, 'description') - 1;
 
   const cats = sh.getLastRow() > 1
     ? sh.getRange(2, 1, sh.getLastRow() - 1, cols.length).getValues()
@@ -184,10 +186,20 @@ function processFile_(book, file, bf, ctx) {
   const where = book.label + ': ' + originalName;
   const bctx = ctx.books[book.key];
 
-  // 1. Already recorded? (a previous run wrote the row but the move failed)
-  if (ctx.fileIds.has(file.getId())) {
-    file.moveTo(bf.processed);
-    logEvent_('INFO', where, 'Already recorded; moved out of Inbox.');
+  // 1. Already recorded? Usually a previous run wrote the row but the
+  //    rename/move failed. Finish filing it where its row says it belongs.
+  const seen = ctx.files.get(file.getId());
+  if (seen) {
+    if (seen.book !== book.key) {
+      // Recorded in the OTHER book (e.g., moved between inboxes without
+      // deleting the old row). Don't file it silently; surface it.
+      file.moveTo(bf.attention);
+      logEvent_('WARN', where, `Already recorded as ${seen.id} in the ${getBook_(seen.book).label} book. ` +
+        `Moved to ${book.label}/Needs Attention. To re-record it here, delete row ${seen.id} and drop the file in this Inbox again.`);
+      return 'skip';
+    }
+    file.moveTo(seen.status === STATUS.NEEDS_REVIEW ? bf.attention : bf.processed);
+    logEvent_('INFO', where, `Already recorded as ${seen.id}; moved out of Inbox.`);
     return 'skip';
   }
 
@@ -270,7 +282,7 @@ function processFile_(book, file, bf, ctx) {
     fileId: file.getId(),
     originalId: original ? original.getId() : ''
   });
-  ctx.fileIds.add(file.getId());
+  ctx.files.set(file.getId(), { book: book.key, id: id, status: status });
   if (key) ctx.dupKeys[key] = id;
 
   // 8. Rename and file the working copy. A failure here is not fatal: the
@@ -311,7 +323,7 @@ function recordFailure_(book, file, bf, ctx, reason) {
     fileId: file.getId(),
     originalId: original ? original.getId() : ''
   });
-  ctx.fileIds.add(file.getId());
+  ctx.files.set(file.getId(), { book: book.key, id: id, status: STATUS.NEEDS_REVIEW });
 
   try {
     file.setName(id + '_' + originalName);
@@ -479,7 +491,13 @@ function dupKey_(vendor, date, total) {
 function writeRow_(book, sheet, obj) {
   const row = book.columns.map(c => (obj[c.key] === undefined ? '' : obj[c.key]));
   sheet.appendRow(row);
+  // Once appendRow succeeds the row exists. A checkbox failure is cosmetic and
+  // must not throw, or the caller would record the same file a second time.
   if (hasCol_(book, 'select')) {
-    sheet.getRange(sheet.getLastRow(), col_(book, 'select')).insertCheckboxes();
+    try {
+      sheet.getRange(sheet.getLastRow(), col_(book, 'select')).insertCheckboxes();
+    } catch (e) {
+      logEvent_('WARN', book.label + ': ' + obj.id, 'Row written but checkbox not added: ' + e.message);
+    }
   }
 }

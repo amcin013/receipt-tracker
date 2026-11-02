@@ -100,6 +100,18 @@ My Drive/
 | Keep Original Copies | Yes | No = skip the Originals archive |
 | Gemini Model | gemini-flash-latest | |
 
+### Sending reimbursement emails as your LHI address
+
+Do this once so reimbursement emails come from your LHI address while the script runs in your personal account:
+
+1. In **personal Gmail** (desktop): **Settings (gear) > See all settings > Accounts and Import > Send mail as > Add another email address**.
+2. Enter your name and your LHI address. Leave **Treat as an alias** checked. Click **Next Step**.
+3. If Gmail asks for SMTP details, use **smtp.gmail.com**, port **587**, TLS. The username is your full LHI address. The password is an **app password** for the LHI account (myaccount.google.com > Security > App passwords while signed in to LHI; this needs 2-Step Verification on). If app passwords are missing, LHI's Workspace admin has turned them off, so ask IT, or leave the alias blank and send from your personal address.
+4. Gmail emails a confirmation code to your LHI inbox. Click the link or enter the code.
+5. On the **Settings** tab of the sheet, put your LHI address in **Send From Alias**. Leave **Send Mode** on **Draft** for the first one and check the From line in the draft.
+
+The script refuses to send if the alias isn't verified, so a typo can't send from the wrong address.
+
 ### Privacy note
 
 Receipts aren't PHI under HIPAA, since HIPAA covers providers, plans, and their business associates, not your own records. Home receipts can still be sensitive: pharmacy and medical receipts may list drug or service names, and everything carries card last-4 digits and shopping history. Two things to know:
@@ -121,7 +133,7 @@ Also check whether LHI policy requires work receipts to be kept in company syste
 
 Photos also work: share an image from your gallery to Drive and save it to an Inbox. Online orders (Amazon, Newegg) don't need scanning. Download the invoice PDF and drop it in the right Inbox.
 
-**Scanned into the wrong Inbox?** Delete the row, move the file from that book's `Processed` back into the correct Inbox, and it'll be recorded again on the next run with a new ID. You can delete the stray `Originals` copy too. If you scan the same receipt into both inboxes, the second one is flagged **Possible duplicate of W-...** (or H-...), so cross-book mistakes are easy to spot.
+**Scanned into the wrong Inbox?** Delete the row first, move the file from that book's `Processed` back into the correct Inbox, and it'll be recorded again on the next run with a new ID. You can delete the stray `Originals` copy too. If you scan the same receipt into both inboxes, the second one is flagged **Possible duplicate of W-...** (or H-...), so cross-book mistakes are easy to spot.
 
 ### What happens next
 
@@ -195,6 +207,7 @@ The Home Expenses tab is a plain table (one row per receipt, fixed headers), so 
 |---|---|
 | Nothing happens after scanning | Is the file in `Receipts/Work/Inbox` or `Receipts/Home/Inbox`, not just "My Drive" or the book folder? Check the **Log** tab, or run Process both Inboxes now |
 | Receipt landed in the wrong book | See "Scanned into the wrong Inbox?" above |
+| File showed up in Needs Attention with no new row | The Log says "Already recorded as ... in the other book". You moved it between Inboxes without deleting the old row. Delete that row, then drop the file in the right Inbox again |
 | Log says "setup problem" | API key is wrong or missing, or the Gemini Model name is invalid. Files stay in their Inbox and retry automatically once fixed |
 | Rows show Needs Review often | Scan flatter and in better light; faded thermal receipts read poorly. Fix the fields by hand |
 | "Send From Alias not set up" | Add the address under Gmail > Settings > Accounts > "Send mail as", or clear the setting |
@@ -222,5 +235,5 @@ The Home Expenses tab is a plain table (one row per receipt, fixed headers), so 
 
 ## Changelog
 
-- **2026-11-02**: v2.0. Separate Work and Home books (own Inbox, folders, tabs, categories, and ID series), with the Inbox deciding the book. Untouched originals archived per book. Runs from your personal Google account. Duplicate check spans both books. Optional Send From Alias for reimbursement emails. Each row is now written before its file is moved. Extraction notes are guarded against formula injection.
+- **2026-11-02**: v2.0. Separate Work and Home books (own Inbox, folders, tabs, categories, and ID series), with the Inbox deciding the book. Untouched originals archived per book. Runs from your personal Google account. Duplicate check spans both books. Optional Send From Alias for reimbursement emails. Each row is now written before its file is moved; a file seen again is filed by its existing row's book and status, and a file already recorded in the other book is surfaced in Needs Attention instead of filed silently. Extraction notes are guarded against formula injection.
 - **2026-10-30**: v1.0. Initial build: Drive inbox processing, Gemini extraction, budget summary, reimbursement email batching.
