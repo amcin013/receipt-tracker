@@ -3,10 +3,11 @@
  * Reimbursement.gs — Build reimbursement emails from selected rows
  * ----------------------------------------------------------------------------
  * Created:  2026-10-30
+ * Updated:  2026-11-02  v2.0 — Work book only; optional Send From Alias
  * Author:   Allen McIntosh (with Claude)
  *
- * Tick the "Select" checkbox on the rows you want, then run
- * Expenses > Prepare reimbursement email. One email is built with:
+ * Work book only. Tick the "Select" checkbox on Work Expenses rows, then run
+ * Expenses > Work: Prepare reimbursement email. One email is built with:
  *   - a summary table (date, vendor, purpose, gallons, amount) + grand total
  *   - every selected receipt attached, using its descriptive file name
  * Send Mode on the Settings tab decides whether it becomes a Gmail draft
@@ -20,11 +21,12 @@
  */
 function prepareReimbursement() {
   const ui = SpreadsheetApp.getUi();
-  const sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.SHEET_EXPENSES);
-  const selected = getSelectedRows_(sh);
+  const book = getBook_('work');
+  const sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(book.expensesSheet);
+  const selected = getSelectedRows_(book, sh);
 
   if (!selected.length) {
-    ui.alert('No rows selected', 'Tick the "Select" checkbox on the receipts you want to submit.', ui.ButtonSet.OK);
+    ui.alert('No rows selected', 'Tick the "Select" checkbox on the ' + book.expensesSheet + ' rows you want to submit.', ui.ButtonSet.OK);
     return;
   }
 
@@ -34,11 +36,27 @@ function prepareReimbursement() {
   const yourName = getSetting_('Your Name');
   const prefix = getSetting_('Subject Prefix') || 'Expense Reimbursement Request';
   const sendNow = getSetting_('Send Mode').toLowerCase() === 'send';
-  const requirePurpose = getSetting_('Require Business Purpose').toLowerCase() !== 'no';
+  const requirePurpose = settingIsYes_('Require Business Purpose');
+  const fromAlias = getSetting_('Send From Alias');
 
   if (!to) {
     ui.alert('Missing recipient', 'Set "Reimbursement Email To" on the Settings tab first.', ui.ButtonSet.OK);
     return;
+  }
+
+  // Gmail only lets a script send "from" an address already verified under
+  // Gmail > Settings > Accounts > "Send mail as". Check before building anything.
+  if (fromAlias) {
+    // getAliases() leaves out the account's own address, so add it explicitly
+    const aliases = GmailApp.getAliases().concat([Session.getEffectiveUser().getEmail()])
+      .map(a => String(a).toLowerCase());
+    if (aliases.indexOf(fromAlias.toLowerCase()) < 0) {
+      ui.alert('Send From Alias not set up',
+        `"${fromAlias}" is not a verified "Send mail as" address in this Gmail account.\n\n` +
+        'Add it in Gmail > Settings > Accounts > "Send mail as", or clear the Send From Alias setting.',
+        ui.ButtonSet.OK);
+      return;
+    }
   }
 
   // ---- Validate rows -------------------------------------------------------
@@ -98,6 +116,7 @@ function prepareReimbursement() {
 
   const confirm = ui.alert('Confirm',
     `${sendNow ? 'SEND' : 'Create a Gmail DRAFT of'} this email?\n\n` +
+    (fromAlias ? `From: ${fromAlias}\n` : '') +
     `To: ${to}${cc ? '\nCC: ' + cc : ''}\nSubject: ${subject}\nAttachments: ${attachments.length}`,
     ui.ButtonSet.YES_NO);
   if (confirm !== ui.Button.YES) return;
@@ -105,6 +124,7 @@ function prepareReimbursement() {
   const options = { htmlBody: html, attachments: attachments };
   if (cc) options.cc = cc;
   if (yourName) options.name = yourName;
+  if (fromAlias) options.from = fromAlias;
 
   if (sendNow) GmailApp.sendEmail(to, subject, plain, options);
   else GmailApp.createDraft(to, subject, plain, options);
@@ -112,10 +132,10 @@ function prepareReimbursement() {
   // ---- Stamp rows ----------------------------------------------------------
   const today = new Date(); today.setHours(0, 0, 0, 0);
   selected.forEach(r => {
-    sh.getRange(r.row, col_('status')).setValue(STATUS.SUBMITTED);
-    sh.getRange(r.row, col_('submitted')).setValue(today);
-    sh.getRange(r.row, col_('batch')).setValue(batchId);
-    sh.getRange(r.row, col_('select')).setValue(false);
+    sh.getRange(r.row, col_(book, 'status')).setValue(STATUS.SUBMITTED);
+    sh.getRange(r.row, col_(book, 'submitted')).setValue(today);
+    sh.getRange(r.row, col_(book, 'batch')).setValue(batchId);
+    sh.getRange(r.row, col_(book, 'select')).setValue(false);
   });
 
   logEvent_('INFO', batchId, `${sendNow ? 'Sent' : 'Drafted'} reimbursement: ${selected.length} receipts, ${money_(grand)} to ${to}`);
@@ -124,7 +144,7 @@ function prepareReimbursement() {
       ? `Reimbursement email sent. Batch ${batchId}.`
       : `A draft is waiting in Gmail > Drafts. Review it and press Send.\n\n` +
         `Rows are marked Submitted (batch ${batchId}). If you discard the draft, use ` +
-        `Expenses > Undo a reimbursement batch to reset them.`,
+        `Expenses > Work: Undo a reimbursement batch to reset them.`,
     ui.ButtonSet.OK);
 }
 
@@ -133,20 +153,21 @@ function prepareReimbursement() {
  */
 function markSelectedReimbursed() {
   const ui = SpreadsheetApp.getUi();
-  const sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.SHEET_EXPENSES);
-  const selected = getSelectedRows_(sh);
+  const book = getBook_('work');
+  const sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(book.expensesSheet);
+  const selected = getSelectedRows_(book, sh);
   if (!selected.length) { ui.alert('Tick the "Select" checkbox on the paid rows first.'); return; }
 
   let changed = 0;
   const skipped = [];
   selected.forEach(r => {
     if (r.values.status === STATUS.SUBMITTED) {
-      sh.getRange(r.row, col_('status')).setValue(STATUS.REIMBURSED);
+      sh.getRange(r.row, col_(book, 'status')).setValue(STATUS.REIMBURSED);
       changed++;
     } else {
       skipped.push(`${r.values.id || 'row ' + r.row} (${r.values.status || 'no status'})`);
     }
-    sh.getRange(r.row, col_('select')).setValue(false);
+    sh.getRange(r.row, col_(book, 'select')).setValue(false);
   });
   ui.alert(`Marked ${changed} row(s) Reimbursed.` +
     (skipped.length ? `\n\nSkipped (not Submitted):\n${skipped.join('\n')}` : ''));
@@ -164,17 +185,18 @@ function undoReimbursementBatch() {
   const batchId = res.getResponseText().trim();
   if (!batchId) return;
 
-  const sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.SHEET_EXPENSES);
+  const book = getBook_('work');
+  const sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(book.expensesSheet);
   if (sh.getLastRow() < 2) return;
-  const batches = sh.getRange(2, col_('batch'), sh.getLastRow() - 1, 1).getValues();
+  const batches = sh.getRange(2, col_(book, 'batch'), sh.getLastRow() - 1, 1).getValues();
 
   let count = 0;
   batches.forEach((b, i) => {
     if (String(b[0]).trim() === batchId) {
       const row = i + 2;
-      sh.getRange(row, col_('status')).setValue(STATUS.UNSUBMITTED);
-      sh.getRange(row, col_('submitted')).clearContent();
-      sh.getRange(row, col_('batch')).clearContent();
+      sh.getRange(row, col_(book, 'status')).setValue(STATUS.UNSUBMITTED);
+      sh.getRange(row, col_(book, 'submitted')).clearContent();
+      sh.getRange(row, col_(book, 'batch')).clearContent();
       count++;
     }
   });
@@ -188,19 +210,17 @@ function undoReimbursementBatch() {
 
 /**
  * Returns rows whose Select checkbox is ticked, as {row, values{key: value}}.
+ * @param {Object} book
  * @param {Sheet} sh
  * @return {{row: number, values: Object}[]}
  */
-function getSelectedRows_(sh) {
+function getSelectedRows_(book, sh) {
   if (sh.getLastRow() < 2) return [];
-  const data = sh.getRange(2, 1, sh.getLastRow() - 1, COLUMNS.length).getValues();
+  const data = sh.getRange(2, 1, sh.getLastRow() - 1, book.columns.length).getValues();
+  const sel = col_(book, 'select') - 1;
   const out = [];
   data.forEach((r, i) => {
-    if (r[col_('select') - 1] === true) {
-      const values = {};
-      COLUMNS.forEach((c, j) => { values[c.key] = r[j]; });
-      out.push({ row: i + 2, values: values });
-    }
+    if (r[sel] === true) out.push({ row: i + 2, values: rowToObject_(book, r) });
   });
   return out;
 }
