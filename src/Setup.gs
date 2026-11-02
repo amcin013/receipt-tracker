@@ -4,6 +4,8 @@
  * ----------------------------------------------------------------------------
  * Created:  2026-10-30
  * Updated:  2026-11-02  v2.0 — per-book folders/tabs, Originals archive
+ *           2026-11-02  v2.1 — inboxes named "Work Inbox"/"Home Inbox";
+ *                       pay period settings; select-last-period menu item
  * Author:   Allen McIntosh (with Claude)
  *
  * Run "Expenses > Setup > Run first-time setup" once. It is safe to re-run:
@@ -11,8 +13,8 @@
  *
  * Drive layout created under My Drive:
  *   Receipts/
- *     Work/  Inbox  Processed/YYYY/MM  Needs Attention  Originals/YYYY/MM
- *     Home/  Inbox  Processed/YYYY/MM  Needs Attention  Originals/YYYY/MM
+ *     Work/  Work Inbox  Processed/YYYY/MM  Needs Attention  Originals/YYYY/MM
+ *     Home/  Home Inbox  Processed/YYYY/MM  Needs Attention  Originals/YYYY/MM
  * ============================================================================
  */
 
@@ -30,6 +32,8 @@ function getDefaultSettings_() {
     ['Send Mode', 'Draft', 'Draft = create a Gmail draft for you to review; Send = send immediately'],
     ['Require Business Purpose', 'Yes', 'Yes = block sending if a selected row has no Business Purpose'],
     ['Default Fuel Purpose', '', 'Optional: auto-filled Business Purpose for new Work Fuel receipts'],
+    ['Pay Period Anchor Start', PAY_PERIOD_DEFAULT_ANCHOR, 'Start date (a Sunday) of any one pay period. Others are counted from it'],
+    ['Pay Period Length (days)', PAY_PERIOD_DEFAULT_LENGTH, '14 = biweekly'],
     ['Keep Original Copies', 'Yes', 'Yes = store an untouched copy of every scan in the book\'s Originals folder'],
     ['Gemini Model', CONFIG.DEFAULT_GEMINI_MODEL, 'Model ID used to read receipts']
   ];
@@ -47,6 +51,7 @@ function onOpen() {
   ui.createMenu('Expenses')
     .addItem('Process both Inboxes now', 'processInboxFromMenu')
     .addSeparator()
+    .addItem('Work: Select receipts for last pay period', 'selectLastPayPeriod')
     .addItem('Work: Prepare reimbursement email (selected rows)', 'prepareReimbursement')
     .addItem('Work: Mark selected as Reimbursed', 'markSelectedReimbursed')
     .addItem('Work: Undo a reimbursement batch...', 'undoReimbursementBatch')
@@ -150,7 +155,7 @@ function showInboxLink() {
   const rows = getBooks_().map(b => {
     const url = folders.books[b.key].inbox.getUrl();
     return `<p ${p}><b>${escapeHtml_(b.label)}:</b> <a href="${url}" target="_blank">` +
-      escapeHtml_(CONFIG.ROOT_FOLDER_NAME + ' / ' + b.folderName + ' / ' + CONFIG.INBOX_FOLDER_NAME) + '</a></p>';
+      escapeHtml_(CONFIG.ROOT_FOLDER_NAME + ' / ' + b.folderName + ' / ' + inboxName_(b)) + '</a></p>';
   }).join('');
   const html = HtmlService.createHtmlOutput(
     `<p ${p}>Scan each receipt into the matching folder:</p>` + rows
@@ -182,15 +187,30 @@ function ensureFolders_() {
     const child = (role, name) => getOrCreateById_(props, prefix + role + '_ID', () =>
       getOrCreateSubfolder_(bookRoot, name));
 
+    // Inboxes carry the book name ("Work Inbox") so the two are easy to tell
+    // apart in the Drive app's save-to picker. Older "Inbox" folders are
+    // renamed in place; the stored ID keeps everything else working.
+    const inbox = child('INBOX', inboxName_(book));
+    if (inbox.getName() !== inboxName_(book)) inbox.setName(inboxName_(book));
+
     out.books[book.key] = {
       root: bookRoot,
-      inbox: child('INBOX', CONFIG.INBOX_FOLDER_NAME),
+      inbox: inbox,
       processed: child('PROCESSED', CONFIG.PROCESSED_FOLDER_NAME),
       attention: child('ATTENTION', CONFIG.ATTENTION_FOLDER_NAME),
       originals: child('ORIGINALS', CONFIG.ORIGINALS_FOLDER_NAME)
     };
   });
   return out;
+}
+
+/**
+ * Display name of a book's Inbox folder, e.g. "Work Inbox".
+ * @param {Object} book
+ * @return {string}
+ */
+function inboxName_(book) {
+  return book.label + ' ' + CONFIG.INBOX_FOLDER_NAME;
 }
 
 /**
@@ -267,6 +287,8 @@ function ensureSettingsSheet_() {
   setList('Send Mode', ['Draft', 'Send']);
   setList('Require Business Purpose', ['Yes', 'No']);
   setList('Keep Original Copies', ['Yes', 'No']);
+  const anchorRow = keys.indexOf('Pay Period Anchor Start');
+  if (anchorRow >= 0) sh.getRange(anchorRow + 2, 2).setNumberFormat('yyyy-mm-dd');
   SETTINGS_CACHE_ = null;
 }
 

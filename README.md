@@ -1,7 +1,7 @@
 # Receipt Tracker
 
 **Created:** 2026-10-30
-**Updated:** 2026-11-02 (v2.0)
+**Updated:** 2026-11-02 (v2.1)
 **Author:** Allen McIntosh (with Claude)
 **Stack:** Google Sheets + Apps Script (V8) + Google Drive + Gemini API + Gmail
 
@@ -23,7 +23,8 @@ All code lives in `src/`.
 | `Setup.gs` | Menu, first-time setup, folders, tabs, Work Summary, trigger |
 | `Gemini.gs` | Sends the receipt to Gemini and parses the structured JSON reply |
 | `Processor.gs` | Watches both Inbox folders, archives originals, writes rows, renames and moves files |
-| `Reimbursement.gs` | Work only: builds the reimbursement email, mark-reimbursed, undo batch |
+| `PayPeriod.gs` | Biweekly pay period math and labels (e.g. `NOV 1- NOV 14`) |
+| `Reimbursement.gs` | Work only: select a pay period, build the reimbursement email, mark-reimbursed, undo batch |
 | `appsscript.json` | Manifest (time zone America/Chicago, V8) |
 
 ---
@@ -46,12 +47,12 @@ Reimbursement emails go from your personal Gmail to your LHI inbox, and you forw
 My Drive/
   Receipts/
     Work/
-      Inbox/                 <- scan work receipts here
+      Work Inbox/            <- scan work receipts here
       Processed/2026/10/     <- renamed working copies (linked as "Receipt")
       Needs Attention/       <- unreadable, low-confidence, or possible duplicates
       Originals/2026/10/     <- untouched copy of every scan (linked as "Original")
     Home/
-      Inbox/                 <- scan home receipts here
+      Home Inbox/            <- scan home receipts here
       Processed/...
       Needs Attention/
       Originals/...
@@ -76,13 +77,15 @@ My Drive/
 
 1. **Use your personal Google account.** If you already set up v1 in your LHI account, open that sheet and run **Expenses > Setup > Turn off auto-processing** there first, so two copies aren't running.
 2. **Create the sheet.** Make a new Google Sheet named something like `Receipts`.
-3. **Add the code.** Go to **Extensions > Apps Script**. Delete the starter `Code.gs` and create six script files named `Config`, `Books`, `Setup`, `Gemini`, `Processor`, and `Reimbursement`, pasting in the matching files from `src/`. File order doesn't matter.
+3. **Add the code.** Go to **Extensions > Apps Script**. Delete the starter `Code.gs` and create seven script files named `Config`, `Books`, `PayPeriod`, `Setup`, `Gemini`, `Processor`, and `Reimbursement`, pasting in the matching files from `src/`. File order doesn't matter.
    To edit the manifest, open **Project Settings (gear) > Show "appsscript.json" manifest file in editor**, then paste in `src/appsscript.json`. Save.
 4. **Reload the sheet.** An **Expenses** menu appears.
 5. **Run setup.** Go to **Expenses > Setup > Run first-time setup** and approve the permissions prompt (Drive, Sheets, Gmail, external requests). After you approve, setup keeps running in the background. Wait for the **Setup complete** popup (up to a minute) before clicking anything else. Setup creates the folders and tabs above and a trigger that checks both Inboxes every 10 minutes.
 6. **Get a Gemini API key.** Go to aistudio.google.com, then **Get API key**. Paste it in via **Expenses > Setup > Set Gemini API key**. It's stored in Script Properties, not on a sheet.
 7. **Fill in the Settings tab.** At minimum, set **Your Name** and **Reimbursement Email To**.
-8. **Bookmark both Inboxes on your phone.** **Expenses > Open Inbox folders** shows both links.
+8. **Star both Inboxes on your phone.** In the Drive app, go to **Files > My Drive > Receipts > Work**, tap **⋮** next to **Work Inbox**, and choose **Add to Starred**. Do the same for **Home Inbox**. Starred folders appear near the top of the save-to picker when you scan.
+
+> The **Expenses** menu only appears in a browser on a computer. The Sheets phone app doesn't show script menus. Scanning and auto-processing work without it, and you can edit rows from the phone.
 9. **Optional:** set monthly Work budgets in Work Categories (column C), then run **Expenses > Setup > Rebuild Work Summary tab**.
 
 ### Settings reference
@@ -98,6 +101,8 @@ My Drive/
 | Require Business Purpose | Yes | Blocks Work submission if Purpose is blank |
 | Default Fuel Purpose | | Auto-fills Purpose on new Work fuel receipts |
 | Keep Original Copies | Yes | No = skip the Originals archive |
+| Pay Period Anchor Start | 2026-10-18 | Start (Sunday) of any one pay period; the rest are counted from it |
+| Pay Period Length (days) | 14 | Biweekly |
 | Gemini Model | gemini-flash-latest | |
 
 ### How reimbursement emails reach LHI
@@ -131,7 +136,7 @@ Also check whether LHI policy requires work receipts to be kept in company syste
 
 1. Open the **Google Drive** app, tap **+**, then **Scan**.
 2. Capture the receipt. It auto-crops; add pages if it's long.
-3. On save, choose **Receipts > Work > Inbox** or **Receipts > Home > Inbox**. Drive remembers the last folder, so **check it each time you switch books**.
+3. On save, choose **Work Inbox** or **Home Inbox** (starred, so they're near the top of the picker). Drive remembers the last folder, so **check it each time you switch books**.
 
 Photos also work: share an image from your gallery to Drive and save it to an Inbox. Online orders (Amazon, Newegg) don't need scanning. Download the invoice PDF and drop it in the right Inbox.
 
@@ -154,8 +159,10 @@ Add **Business Purpose** (e.g., "Travel to Round Rock site, PACS workstation ins
 
 ### Work: submitting for reimbursement
 
-1. On **Work Expenses**, tick **Select** on the reimbursable rows.
-2. Run **Expenses > Work: Prepare reimbursement email (selected rows)**.
+Pay periods are biweekly, Sunday to Saturday, and are named the way payroll names them: `OCT 18- OCT 31`, `NOV 1- NOV 14`, and so on. Submit the Monday after a period ends (e.g. Nov 16 for `NOV 1- NOV 14`).
+
+1. Run **Expenses > Work: Select receipts for last pay period**. It ticks **Select** on every Reimbursable, Unsubmitted receipt dated in the most recent pay period that has ended, and clears any other ticks. It also lists receipts from that period that are still **Needs Review**, so you can fix them first. You can also tick or untick rows by hand.
+2. Run **Expenses > Work: Prepare reimbursement email (selected rows)**. The subject leads with the pay period, e.g. `Expense Reimbursement Request: NOV 1- NOV 14 (4 receipts, $123.45)`, and the body names the period. If the selected receipts span more than one period, you're warned first, and the subject uses the latest period.
 3. The script checks every row: it must be Reimbursable, have a total, a date, and a purpose (if required), and not already be submitted.
 4. One email is built with a summary table, a grand total, and all receipts attached.
    - **Send Mode = Draft** (default): it lands in Gmail Drafts for you to review and send.
@@ -207,7 +214,7 @@ The Home Expenses tab is a plain table (one row per receipt, fixed headers), so 
 
 | Symptom | Check |
 |---|---|
-| Nothing happens after scanning | Is the file in `Receipts/Work/Inbox` or `Receipts/Home/Inbox`, not just "My Drive" or the book folder? Check the **Log** tab, or run Process both Inboxes now |
+| Nothing happens after scanning | Is the file in `Receipts/Work/Work Inbox` or `Receipts/Home/Home Inbox`, not just "My Drive" or the book folder? Check the **Log** tab, or run Process both Inboxes now |
 | Receipt landed in the wrong book | See "Scanned into the wrong Inbox?" above |
 | File showed up in Needs Attention with no new row | The Log says "Already recorded as ... in the other book". You moved it between Inboxes without deleting the old row. Delete that row, then drop the file in the right Inbox again |
 | Log says "setup problem" | API key is wrong or missing, or the Gemini Model name is invalid. Files stay in their Inbox and retry automatically once fixed |
@@ -237,6 +244,7 @@ The Home Expenses tab is a plain table (one row per receipt, fixed headers), so 
 
 ## Changelog
 
+- **2026-11-02**: v2.1. Inbox folders are named **Work Inbox** and **Home Inbox**, and existing ones are renamed on the next setup run or auto-process. Biweekly pay periods: the email subject and body name the period (e.g. `NOV 1- NOV 14`), and **Work: Select receipts for last pay period** ticks the right rows.
 - **2026-11-02**: v2.0.2. Setup holds a lock so overlapping runs can't duplicate anything, and it removes duplicate Settings rows left by earlier runs. When a key appears twice, the first row now wins.
 - **2026-11-02**: v2.0.1 (docs). Default workflow is now: email the batch to your own LHI inbox, then forward it. The alias is optional.
 - **2026-11-02**: v2.0. Separate Work and Home books (own Inbox, folders, tabs, categories, and ID series), with the Inbox deciding the book. Untouched originals archived per book. Runs from your personal Google account. Duplicate check spans both books. Optional Send From Alias for reimbursement emails. Each row is now written before its file is moved; a file seen again is filed by its existing row's book and status, and a file already recorded in the other book is surfaced in Needs Attention instead of filed silently. Extraction notes are guarded against formula injection.

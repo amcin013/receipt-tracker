@@ -4,10 +4,13 @@
  * ----------------------------------------------------------------------------
  * Created:  2026-10-30
  * Updated:  2026-11-02  v2.0 — Work book only; optional Send From Alias
+ *           2026-11-02  v2.1 — pay period in subject/body; select-last-period
  * Author:   Allen McIntosh (with Claude)
  *
- * Work book only. Tick the "Select" checkbox on Work Expenses rows, then run
+ * Work book only. Tick the "Select" checkbox on Work Expenses rows (or use
+ * Expenses > Work: Select receipts for last pay period), then run
  * Expenses > Work: Prepare reimbursement email. One email is built with:
+ *   - a subject that leads with the pay period, e.g. "...: NOV 1- NOV 14"
  *   - a summary table (date, vendor, purpose, gallons, amount) + grand total
  *   - every selected receipt attached, using its descriptive file name
  * Send Mode on the Settings tab decides whether it becomes a Gmail draft
@@ -108,13 +111,25 @@ function prepareReimbursement() {
   const first = fmt(sorted[0].values.date);
   const last = fmt(sorted[sorted.length - 1].values.date);
   const range = first === last ? first : `${first} - ${last}`;
-  const subject = `${prefix}: ${sorted.length} receipt${sorted.length > 1 ? 's' : ''}, ${money_(grand)} (${range})`;
+
+  // Pay period(s) the receipts fall in. Normally one; if a late receipt from
+  // an earlier period is included, the subject uses the latest period and
+  // the body names them all.
+  const periods = payPeriodsForRows_(sorted);
+  const period = periods[periods.length - 1];
+  const periodText = periods.map(p => p.label).join(', ');
+  const subject = buildReimbursementSubject_(prefix, period.label, sorted.length, grand);
   const batchId = 'B-' + Utilities.formatDate(new Date(), tz, 'yyyyMMdd-HHmmss');
 
-  const html = buildEmailHtml_(sorted, grand, range, batchId, yourName, fmt);
-  const plain = buildEmailPlain_(sorted, grand, range, batchId, yourName, fmt);
+  const html = buildEmailHtml_(sorted, grand, range, batchId, yourName, fmt, periodText);
+  const plain = buildEmailPlain_(sorted, grand, range, batchId, yourName, fmt, periodText);
 
+  const spanWarning = periods.length > 1
+    ? `NOTE: these receipts span ${periods.length} pay periods (${periodText}). ` +
+      `The subject uses ${period.label}.\n\n`
+    : '';
   const confirm = ui.alert('Confirm',
+    spanWarning +
     `${sendNow ? 'SEND' : 'Create a Gmail DRAFT of'} this email?\n\n` +
     (fromAlias ? `From: ${fromAlias}\n` : '') +
     `To: ${to}${cc ? '\nCC: ' + cc : ''}\nSubject: ${subject}\nAttachments: ${attachments.length}`,
@@ -204,6 +219,82 @@ function undoReimbursementBatch() {
   ui.alert(count ? `Reset ${count} row(s) to Unsubmitted.` : 'No rows found with that Batch ID.');
 }
 
+/**
+ * Menu entry: ticks Select on every Work receipt that is ready to submit for
+ * the most recent pay period that has ended (Reimbursable, Unsubmitted, dated
+ * inside the period). Clears any other ticks first so the selection is exact.
+ * Run it, look over the ticked rows, then Prepare reimbursement email.
+ */
+function selectLastPayPeriod() {
+  const ui = SpreadsheetApp.getUi();
+  const book = getBook_('work');
+  const sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(book.expensesSheet);
+  const period = lastCompletedPayPeriod_();
+  const result = selectRowsForPeriod_(book, sh, period);
+
+  ui.alert('Pay period ' + period.label,
+    (result.selected
+      ? `Selected ${result.selected} receipt(s) totaling ${money_(result.total)}.\n\n` +
+        'Check the ticked rows, then run Work: Prepare reimbursement email.'
+      : 'No Unsubmitted reimbursable receipts found for this pay period.') +
+    (result.review.length
+      ? `\n\nNot selected, still Needs Review: ${result.review.join(', ')}. ` +
+        'Fix them and set Status to Unsubmitted if they should be included.'
+      : ''),
+    ui.ButtonSet.OK);
+}
+
+/**
+ * Sets the Select checkboxes for one pay period (see selectLastPayPeriod).
+ * @param {Object} book - the Work book
+ * @param {Sheet} sh
+ * @param {{start: Date, end: Date}} period
+ * @return {{selected: number, total: number, review: string[]}}
+ */
+function selectRowsForPeriod_(book, sh, period) {
+  const out = { selected: 0, total: 0, review: [] };
+  if (sh.getLastRow() < 2) return out;
+  const data = sh.getRange(2, 1, sh.getLastRow() - 1, book.columns.length).getValues();
+  const ticks = data.map(r => {
+    const v = rowToObject_(book, r);
+    const inPeriod = v.date instanceof Date && inPayPeriod_(v.date, period);
+    if (inPeriod && v.status === STATUS.NEEDS_REVIEW) out.review.push(v.id);
+    const pick = inPeriod && v.type === TYPES.REIMBURSABLE && v.status === STATUS.UNSUBMITTED;
+    if (pick) { out.selected++; out.total += Number(v.total) || 0; }
+    return [pick];
+  });
+  // One write for the whole column instead of one call per row
+  sh.getRange(2, col_(book, 'select'), ticks.length, 1).setValues(ticks);
+  return out;
+}
+
+/**
+ * Distinct pay periods for a set of rows, oldest first.
+ * @param {{values: Object}[]} rows - each with a Date in values.date
+ * @return {{start: Date, end: Date, label: string, key: string}[]}
+ */
+function payPeriodsForRows_(rows) {
+  const seen = {};
+  rows.forEach(r => {
+    const p = payPeriodFor_(r.values.date);
+    seen[p.key] = p;
+  });
+  return Object.keys(seen).map(k => seen[k]).sort((a, b) => a.start - b.start);
+}
+
+/**
+ * Email subject, led by the pay period so it matches payroll's naming:
+ * "Expense Reimbursement Request: NOV 1- NOV 14 (3 receipts, $123.45)"
+ * @param {string} prefix
+ * @param {string} periodLabel
+ * @param {number} count
+ * @param {number} grand
+ * @return {string}
+ */
+function buildReimbursementSubject_(prefix, periodLabel, count, grand) {
+  return `${prefix}: ${periodLabel} (${count} receipt${count === 1 ? '' : 's'}, ${money_(grand)})`;
+}
+
 /* ============================================================================
  * Helpers
  * ========================================================================== */
@@ -228,7 +319,7 @@ function getSelectedRows_(book, sh) {
 /**
  * HTML body: intro, table, total, sign-off.
  */
-function buildEmailHtml_(rows, grand, range, batchId, yourName, fmt) {
+function buildEmailHtml_(rows, grand, range, batchId, yourName, fmt, periodText) {
   const th = 'style="text-align:left;padding:6px 10px;background:#1f3864;color:#fff;font-weight:bold"';
   const td = 'style="padding:6px 10px;border-bottom:1px solid #ddd"';
   const tdr = 'style="padding:6px 10px;border-bottom:1px solid #ddd;text-align:right"';
@@ -250,7 +341,8 @@ function buildEmailHtml_(rows, grand, range, batchId, yourName, fmt) {
   return '<div style="font-family:Arial,sans-serif;font-size:14px;color:#222">' +
     '<p>Hello,</p>' +
     `<p>Please find attached ${rows.length} receipt${rows.length > 1 ? 's' : ''} for reimbursement ` +
-    `covering ${escapeHtml_(range)}, totaling <b>${escapeHtml_(money_(grand))}</b>.</p>` +
+    `for pay period <b>${escapeHtml_(periodText)}</b> (receipts dated ${escapeHtml_(range)}), ` +
+    `totaling <b>${escapeHtml_(money_(grand))}</b>.</p>` +
     '<table style="border-collapse:collapse;font-size:13px">' +
     `<tr><th ${th}>Date</th><th ${th}>Vendor</th><th ${th}>Category</th><th ${th}>Business Purpose</th>` +
     (hasFuel ? `<th ${th}>Gallons</th>` : '') +
@@ -268,12 +360,13 @@ function buildEmailHtml_(rows, grand, range, batchId, yourName, fmt) {
 /**
  * Plain-text fallback body.
  */
-function buildEmailPlain_(rows, grand, range, batchId, yourName, fmt) {
+function buildEmailPlain_(rows, grand, range, batchId, yourName, fmt, periodText) {
   const lines = rows.map(r => {
     const v = r.values;
     return `${fmt(v.date)}  ${v.vendor}  ${v.category}  ${money_(v.total)}  ${v.purpose}  [${v.id}]`;
   });
   return 'Hello,\n\n' +
-    `Please find attached ${rows.length} receipt(s) for reimbursement covering ${range}, totaling ${money_(grand)}.\n\n` +
+    `Please find attached ${rows.length} receipt(s) for reimbursement for pay period ${periodText} ` +
+    `(receipts dated ${range}), totaling ${money_(grand)}.\n\n` +
     lines.join('\n') + `\n\nTotal: ${money_(grand)}\n\nThank you,\n${yourName}\n\nReference: ${batchId}`;
 }

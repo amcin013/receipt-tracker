@@ -4,6 +4,7 @@
  * ----------------------------------------------------------------------------
  * Created:  2026-10-30
  * Updated:  2026-11-02  v2.0 — Work/Home books, original-copy archive
+ *           2026-11-02  v2.1 — raw setting values (for date settings)
  * Author:   Allen McIntosh (with Claude)
  *
  * Generic constants and utilities used by every file. The Work and Home
@@ -158,12 +159,12 @@ function rowToObject_(book, row) {
 let SETTINGS_CACHE_ = null;
 
 /**
- * Reads a value from the Settings sheet (Key | Value | Notes).
- * Cached for the life of one execution.
+ * Reads a Settings value exactly as the sheet stores it (a Date for date
+ * cells, a number for numbers, otherwise text). Cached for one execution.
  * @param {string} key
- * @return {string} trimmed value, or '' if missing
+ * @return {*} the cell value, or '' if missing
  */
-function getSetting_(key) {
+function getSettingRaw_(key) {
   if (!SETTINGS_CACHE_) {
     SETTINGS_CACHE_ = {};
     const sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.SHEET_SETTINGS);
@@ -171,11 +172,21 @@ function getSetting_(key) {
       sh.getRange(2, 1, sh.getLastRow() - 1, 2).getValues().forEach(r => {
         // First occurrence wins, matching how setup de-duplicates keys
         const k = String(r[0]).trim();
-        if (k && !(k in SETTINGS_CACHE_)) SETTINGS_CACHE_[k] = String(r[1]).trim();
+        if (k && !(k in SETTINGS_CACHE_)) SETTINGS_CACHE_[k] = r[1];
       });
     }
   }
-  return SETTINGS_CACHE_[key] || '';
+  const v = SETTINGS_CACHE_[key];
+  return v === undefined || v === null ? '' : v;
+}
+
+/**
+ * Reads a value from the Settings sheet (Key | Value | Notes) as text.
+ * @param {string} key
+ * @return {string} trimmed value, or '' if missing
+ */
+function getSetting_(key) {
+  return String(getSettingRaw_(key)).trim();
 }
 
 /**
