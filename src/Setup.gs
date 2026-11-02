@@ -3,46 +3,37 @@
  * Setup.gs — Menu, first-time setup, folders, sheets, trigger management
  * ----------------------------------------------------------------------------
  * Created:  2026-10-30
+ * Updated:  2026-11-02  v2.0 — per-book folders/tabs, Originals archive
  * Author:   Allen McIntosh (with Claude)
  *
  * Run "Expenses > Setup > Run first-time setup" once. It is safe to re-run:
  * existing folders, sheets, and data are kept; only missing pieces are added.
+ *
+ * Drive layout created under My Drive:
+ *   Receipts/
+ *     Work/  Inbox  Processed/YYYY/MM  Needs Attention  Originals/YYYY/MM
+ *     Home/  Inbox  Processed/YYYY/MM  Needs Attention  Originals/YYYY/MM
  * ============================================================================
  */
 
 /* ----------------------------------------------------------------------------
- * Default categories. "Default Type" decides whether a new receipt in that
- * category starts as Reimbursable or Track Only (you can override per row).
- * The description is sent to Gemini to help it pick the right category.
+ * Default settings rows: Key, Value, Notes. Built in a function so it never
+ * depends on .gs file load order.
  * ------------------------------------------------------------------------- */
-const DEFAULT_CATEGORIES = [
-  // Category, Default Type, Monthly Budget, Description (sent to AI)
-  ['Fuel', TYPES.REIMBURSABLE, '', 'Gasoline/diesel purchases at a fuel station'],
-  ['Parking & Tolls', TYPES.REIMBURSABLE, '', 'Parking garages, meters, toll charges'],
-  ['Meals', TYPES.REIMBURSABLE, '', 'Restaurants, food purchased while traveling for work'],
-  ['Travel - Lodging', TYPES.REIMBURSABLE, '', 'Hotels and lodging'],
-  ['IT Equipment', TYPES.TRACK_ONLY, '', 'Computers, monitors, network gear, printers, phones, tablets'],
-  ['Cables & Accessories', TYPES.TRACK_ONLY, '', 'Cables, adapters, mice, keyboards, mounts, small peripherals'],
-  ['Software & Subscriptions', TYPES.TRACK_ONLY, '', 'Software licenses, SaaS, app subscriptions'],
-  ['Office Supplies', TYPES.TRACK_ONLY, '', 'Paper, toner, labels, general office items'],
-  ['Tools & Maintenance', TYPES.TRACK_ONLY, '', 'Hand tools, hardware store items, repair parts'],
-  ['Shipping', TYPES.TRACK_ONLY, '', 'Postage, courier, shipping fees'],
-  ['Other', TYPES.TRACK_ONLY, '', 'Anything that does not fit another category']
-];
-
-/* ----------------------------------------------------------------------------
- * Default settings rows: Key, Value, Notes
- * ------------------------------------------------------------------------- */
-const DEFAULT_SETTINGS = [
-  ['Your Name', '', 'Used to sign reimbursement emails'],
-  ['Reimbursement Email To', '', 'Who receives reimbursement requests (comma-separate multiple)'],
-  ['Reimbursement Email CC', '', 'Optional CC (e.g., your own address)'],
-  ['Subject Prefix', 'Expense Reimbursement Request', 'Start of the email subject line'],
-  ['Send Mode', 'Draft', 'Draft = create a Gmail draft for you to review; Send = send immediately'],
-  ['Require Business Purpose', 'Yes', 'Yes = block sending if a selected row has no Business Purpose'],
-  ['Default Fuel Purpose', '', 'Optional: auto-filled Business Purpose for new Fuel receipts'],
-  ['Gemini Model', CONFIG.DEFAULT_GEMINI_MODEL, 'Model ID used to read receipts']
-];
+function getDefaultSettings_() {
+  return [
+    ['Your Name', '', 'Used to sign reimbursement emails'],
+    ['Reimbursement Email To', '', 'Who receives Work reimbursement requests (comma-separate multiple)'],
+    ['Reimbursement Email CC', '', 'Optional CC (e.g., your work address)'],
+    ['Send From Alias', '', 'Optional: send reimbursement email from this address. Must already be set up in Gmail > Settings > Accounts > "Send mail as". Blank = your personal Gmail'],
+    ['Subject Prefix', 'Expense Reimbursement Request', 'Start of the email subject line'],
+    ['Send Mode', 'Draft', 'Draft = create a Gmail draft for you to review; Send = send immediately'],
+    ['Require Business Purpose', 'Yes', 'Yes = block sending if a selected row has no Business Purpose'],
+    ['Default Fuel Purpose', '', 'Optional: auto-filled Business Purpose for new Work Fuel receipts'],
+    ['Keep Original Copies', 'Yes', 'Yes = store an untouched copy of every scan in the book\'s Originals folder'],
+    ['Gemini Model', CONFIG.DEFAULT_GEMINI_MODEL, 'Model ID used to read receipts']
+  ];
+}
 
 /* ============================================================================
  * Menu
@@ -54,17 +45,17 @@ const DEFAULT_SETTINGS = [
 function onOpen() {
   const ui = SpreadsheetApp.getUi();
   ui.createMenu('Expenses')
-    .addItem('Process Inbox now', 'processInboxFromMenu')
+    .addItem('Process both Inboxes now', 'processInboxFromMenu')
     .addSeparator()
-    .addItem('Prepare reimbursement email (selected rows)', 'prepareReimbursement')
-    .addItem('Mark selected as Reimbursed', 'markSelectedReimbursed')
-    .addItem('Undo a reimbursement batch...', 'undoReimbursementBatch')
+    .addItem('Work: Prepare reimbursement email (selected rows)', 'prepareReimbursement')
+    .addItem('Work: Mark selected as Reimbursed', 'markSelectedReimbursed')
+    .addItem('Work: Undo a reimbursement batch...', 'undoReimbursementBatch')
     .addSeparator()
-    .addItem('Open Inbox folder', 'showInboxLink')
+    .addItem('Open Inbox folders', 'showInboxLink')
     .addSubMenu(ui.createMenu('Setup')
       .addItem('Run first-time setup', 'runSetup')
       .addItem('Set Gemini API key...', 'setApiKey')
-      .addItem('Rebuild Summary tab', 'rebuildSummary')
+      .addItem('Rebuild Work Summary tab', 'rebuildSummary')
       .addItem('Turn on auto-processing (every 10 min)', 'installTrigger')
       .addItem('Turn off auto-processing', 'removeTriggers'))
     .addToUi();
@@ -82,22 +73,26 @@ function runSetup() {
   const ui = SpreadsheetApp.getUi();
   const folders = ensureFolders_();
   ensureSettingsSheet_();
-  ensureCategoriesSheet_();
-  ensureExpensesSheet_();
+  getBooks_().forEach(book => {
+    ensureCategoriesSheet_(book);
+    ensureExpensesSheet_(book);
+  });
   ensureLogSheet_();
   buildSummarySheet_();
+  arrangeTabs_();
   installTrigger(true);
 
   const hasKey = !!PropertiesService.getScriptProperties().getProperty(CONFIG.PROP_API_KEY);
+  const links = getBooks_().map(b =>
+    `${b.label} Inbox: ${folders.books[b.key].inbox.getUrl()}`).join('\n');
   ui.alert(
     'Setup complete',
-    'Drive folder created: "' + CONFIG.ROOT_FOLDER_NAME + '/' + CONFIG.INBOX_FOLDER_NAME + '"\n' +
-    folders.inbox.getUrl() + '\n\n' +
+    'Drive folders created under "' + CONFIG.ROOT_FOLDER_NAME + '".\n' + links + '\n\n' +
     'Next steps:\n' +
     (hasKey ? '' : '1. Expenses > Setup > Set Gemini API key\n') +
     '2. Fill in the Settings tab (email recipient, your name)\n' +
-    '3. Scan a receipt into the Inbox folder with the Drive app\n' +
-    '4. Wait up to ' + CONFIG.TRIGGER_MINUTES + ' minutes, or use Expenses > Process Inbox now',
+    '3. Scan a receipt into the Work or Home Inbox with the Drive app\n' +
+    '4. Wait up to ' + CONFIG.TRIGGER_MINUTES + ' minutes, or use Expenses > Process both Inboxes now',
     ui.ButtonSet.OK
   );
 }
@@ -123,20 +118,24 @@ function setApiKey() {
  */
 function rebuildSummary() {
   buildSummarySheet_();
-  SpreadsheetApp.getUi().alert('Summary tab rebuilt.');
+  SpreadsheetApp.getUi().alert('Work Summary tab rebuilt.');
 }
 
 /**
- * Shows a link to the Inbox folder (handy for bookmarking on your phone).
+ * Shows links to both Inbox folders (handy for bookmarking on your phone).
  */
 function showInboxLink() {
-  const url = ensureFolders_().inbox.getUrl();
+  const folders = ensureFolders_();
+  const p = 'style="font-family:Arial;margin:6px 0"';
+  const rows = getBooks_().map(b => {
+    const url = folders.books[b.key].inbox.getUrl();
+    return `<p ${p}><b>${escapeHtml_(b.label)}:</b> <a href="${url}" target="_blank">` +
+      escapeHtml_(CONFIG.ROOT_FOLDER_NAME + ' / ' + b.folderName + ' / ' + CONFIG.INBOX_FOLDER_NAME) + '</a></p>';
+  }).join('');
   const html = HtmlService.createHtmlOutput(
-    '<p style="font-family:Arial">Scan receipts into this folder:</p>' +
-    '<p style="font-family:Arial"><a href="' + url + '" target="_blank">' +
-    escapeHtml_(CONFIG.ROOT_FOLDER_NAME + ' / ' + CONFIG.INBOX_FOLDER_NAME) + '</a></p>'
-  ).setWidth(360).setHeight(120);
-  SpreadsheetApp.getUi().showModalDialog(html, 'Receipt Inbox');
+    `<p ${p}>Scan each receipt into the matching folder:</p>` + rows
+  ).setWidth(380).setHeight(150);
+  SpreadsheetApp.getUi().showModalDialog(html, 'Receipt Inboxes');
 }
 
 /* ============================================================================
@@ -144,26 +143,34 @@ function showInboxLink() {
  * ========================================================================== */
 
 /**
- * Returns the root/inbox/processed/attention folders, creating any that are
- * missing. IDs are stored in Script Properties so renaming/moving the folders
- * in Drive later does not break anything.
- * @return {{root: Folder, inbox: Folder, processed: Folder, attention: Folder}}
+ * Returns the root folder plus each book's inbox/processed/attention/originals
+ * folders, creating any that are missing. IDs are stored in Script Properties
+ * so renaming or moving the folders in Drive later does not break anything.
+ * @return {{root: Folder, books: Object<string, {root: Folder, inbox: Folder,
+ *           processed: Folder, attention: Folder, originals: Folder}>}}
  */
 function ensureFolders_() {
   const props = PropertiesService.getScriptProperties();
-
   const root = getOrCreateById_(props, CONFIG.PROP_ROOT_ID, () =>
     DriveApp.createFolder(CONFIG.ROOT_FOLDER_NAME));
 
-  const child = (propKey, name) => getOrCreateById_(props, propKey, () =>
-    getOrCreateSubfolder_(root, name));
+  const out = { root: root, books: {} };
+  getBooks_().forEach(book => {
+    const prefix = CONFIG.PROP_FOLDER_PREFIX + book.key.toUpperCase() + '_';
+    const bookRoot = getOrCreateById_(props, prefix + 'ROOT_ID', () =>
+      getOrCreateSubfolder_(root, book.folderName));
+    const child = (role, name) => getOrCreateById_(props, prefix + role + '_ID', () =>
+      getOrCreateSubfolder_(bookRoot, name));
 
-  return {
-    root: root,
-    inbox: child(CONFIG.PROP_INBOX_ID, CONFIG.INBOX_FOLDER_NAME),
-    processed: child(CONFIG.PROP_PROCESSED_ID, CONFIG.PROCESSED_FOLDER_NAME),
-    attention: child(CONFIG.PROP_ATTENTION_ID, CONFIG.ATTENTION_FOLDER_NAME)
-  };
+    out.books[book.key] = {
+      root: bookRoot,
+      inbox: child('INBOX', CONFIG.INBOX_FOLDER_NAME),
+      processed: child('PROCESSED', CONFIG.PROCESSED_FOLDER_NAME),
+      attention: child('ATTENTION', CONFIG.ATTENTION_FOLDER_NAME),
+      originals: child('ORIGINALS', CONFIG.ORIGINALS_FOLDER_NAME)
+    };
+  });
+  return out;
 }
 
 /**
@@ -220,12 +227,12 @@ function ensureSettingsSheet_() {
     sh.getRange(1, 1, 1, 3).setValues([['Key', 'Value', 'Notes']])
       .setFontWeight('bold').setBackground('#e8eaed');
     sh.setFrozenRows(1);
-    sh.setColumnWidth(1, 200); sh.setColumnWidth(2, 280); sh.setColumnWidth(3, 420);
+    sh.setColumnWidth(1, 200); sh.setColumnWidth(2, 280); sh.setColumnWidth(3, 520);
   }
   const existing = sh.getLastRow() > 1
     ? sh.getRange(2, 1, sh.getLastRow() - 1, 1).getValues().map(r => String(r[0]).trim())
     : [];
-  DEFAULT_SETTINGS.forEach(row => {
+  getDefaultSettings_().forEach(row => {
     if (existing.indexOf(row[0]) < 0) sh.appendRow(row);
   });
 
@@ -238,115 +245,140 @@ function ensureSettingsSheet_() {
   };
   setList('Send Mode', ['Draft', 'Send']);
   setList('Require Business Purpose', ['Yes', 'No']);
+  setList('Keep Original Copies', ['Yes', 'No']);
   SETTINGS_CACHE_ = null;
 }
 
 /**
- * Categories tab: Category | Default Type | Monthly Budget | Description.
- * Only seeds defaults when the tab is empty, so your edits are preserved.
+ * A book's Categories tab. Only seeds defaults when the tab is empty, so your
+ * edits are preserved.
+ * @param {Object} book
  */
-function ensureCategoriesSheet_() {
-  const sh = getOrCreateSheet_(CONFIG.SHEET_CATEGORIES);
+function ensureCategoriesSheet_(book) {
+  const sh = getOrCreateSheet_(book.categoriesSheet);
+  const cols = book.categoryColumns;
   if (sh.getLastRow() === 0) {
-    sh.getRange(1, 1, 1, 4)
-      .setValues([['Category', 'Default Type', 'Monthly Budget', 'Description (helps the AI choose)']])
+    sh.getRange(1, 1, 1, cols.length).setValues([cols.map(c => c.header)])
       .setFontWeight('bold').setBackground('#e8eaed');
-    sh.getRange(2, 1, DEFAULT_CATEGORIES.length, 4).setValues(DEFAULT_CATEGORIES);
+    sh.getRange(2, 1, book.defaultCategories.length, cols.length).setValues(book.defaultCategories);
     sh.setFrozenRows(1);
-    sh.setColumnWidth(1, 190); sh.setColumnWidth(2, 120);
-    sh.setColumnWidth(3, 120); sh.setColumnWidth(4, 420);
+    cols.forEach((c, i) => sh.setColumnWidth(i + 1, c.width));
   }
-  sh.getRange('B2:B').setDataValidation(SpreadsheetApp.newDataValidation()
-    .requireValueInList([TYPES.REIMBURSABLE, TYPES.TRACK_ONLY], true).build());
-  sh.getRange('C2:C').setNumberFormat('$#,##0.00');
+  const idx = key => cols.findIndex(c => c.key === key) + 1;
+  if (idx('type')) {
+    const L = colLetter_(idx('type'));
+    sh.getRange(L + '2:' + L).setDataValidation(SpreadsheetApp.newDataValidation()
+      .requireValueInList([TYPES.REIMBURSABLE, TYPES.TRACK_ONLY], true).build());
+  }
+  if (idx('budget')) {
+    const L = colLetter_(idx('budget'));
+    sh.getRange(L + '2:' + L).setNumberFormat('$#,##0.00');
+  }
 }
 
 /**
- * Expenses tab: headers, widths, formats, dropdowns, filter.
+ * A book's Expenses tab: headers, widths, formats, dropdowns, filter.
+ * @param {Object} book
  */
-function ensureExpensesSheet_() {
-  const sh = getOrCreateSheet_(CONFIG.SHEET_EXPENSES);
-  const n = COLUMNS.length;
+function ensureExpensesSheet_(book) {
+  const sh = getOrCreateSheet_(book.expensesSheet);
+  const n = book.columns.length;
 
   if (sh.getLastRow() === 0) {
-    sh.getRange(1, 1, 1, n).setValues([COLUMNS.map(c => c.header)])
-      .setFontWeight('bold').setBackground('#1f3864').setFontColor('#ffffff')
+    sh.getRange(1, 1, 1, n).setValues([book.columns.map(c => c.header)])
+      .setFontWeight('bold').setBackground(book.headerColor).setFontColor('#ffffff')
       .setWrap(true).setVerticalAlignment('middle');
     sh.setFrozenRows(1);
-    sh.setFrozenColumns(col_('vendor'));
-    COLUMNS.forEach((c, i) => sh.setColumnWidth(i + 1, c.width));
-    sh.hideColumns(col_('fileId'));
+    sh.setFrozenColumns(col_(book, 'vendor'));
+    book.columns.forEach((c, i) => {
+      sh.setColumnWidth(i + 1, c.width);
+      if (c.hidden) sh.hideColumns(i + 1);
+    });
   }
 
-  const L = k => colLetter_(col_(k));
-  const range = k => sh.getRange(L(k) + '2:' + L(k));
+  const range = k => {
+    const L = colLetter_(col_(book, k));
+    return sh.getRange(L + '2:' + L);
+  };
+  const ifCol = (k, fn) => { if (hasCol_(book, k)) fn(range(k)); };
 
   // Number / date formats
   range('added').setNumberFormat('yyyy-mm-dd hh:mm');
   range('date').setNumberFormat('yyyy-mm-dd');
-  range('submitted').setNumberFormat('yyyy-mm-dd');
   ['subtotal', 'tax', 'total'].forEach(k => range(k).setNumberFormat('$#,##0.00'));
   range('gallons').setNumberFormat('0.000');
   range('ppg').setNumberFormat('$0.000');
   range('payment').setNumberFormat('@'); // keep leading zeros on card last-4
+  ifCol('submitted', r => r.setNumberFormat('yyyy-mm-dd'));
 
   // Dropdowns
-  const catSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.SHEET_CATEGORIES);
+  const catSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(book.categoriesSheet);
   range('category').setDataValidation(SpreadsheetApp.newDataValidation()
     .requireValueInRange(catSheet.getRange('A2:A'), true).setAllowInvalid(true).build());
-  range('type').setDataValidation(SpreadsheetApp.newDataValidation()
-    .requireValueInList([TYPES.REIMBURSABLE, TYPES.TRACK_ONLY], true).build());
+  ifCol('type', r => r.setDataValidation(SpreadsheetApp.newDataValidation()
+    .requireValueInList([TYPES.REIMBURSABLE, TYPES.TRACK_ONLY], true).build()));
   range('status').setDataValidation(SpreadsheetApp.newDataValidation()
-    .requireValueInList(Object.keys(STATUS).map(k => STATUS[k]), true).build());
+    .requireValueInList(book.statuses, true).build());
 
   // Status colors
   const statusRange = range('status');
-  const rule = (text, bg) => SpreadsheetApp.newConditionalFormatRule()
-    .whenTextEqualTo(text).setBackground(bg).setRanges([statusRange]).build();
-  sh.setConditionalFormatRules([
-    rule(STATUS.NEEDS_REVIEW, '#f4cccc'),
-    rule(STATUS.UNSUBMITTED, '#fff2cc'),
-    rule(STATUS.SUBMITTED, '#cfe2f3'),
-    rule(STATUS.REIMBURSED, '#d9ead3'),
-    rule(STATUS.REJECTED, '#e6b8af'),
-    rule(STATUS.TRACKED, '#eeeeee')
-  ]);
+  sh.setConditionalFormatRules(book.statuses.map(s =>
+    SpreadsheetApp.newConditionalFormatRule().whenTextEqualTo(s)
+      .setBackground(STATUS_COLORS[s] || '#ffffff').setRanges([statusRange]).build()));
 
   // Filter over the full sheet height so newly added rows are included
   if (!sh.getFilter()) sh.getRange(1, 1, sh.getMaxRows(), n).createFilter();
 }
 
 /**
- * Log tab for processing history and errors.
+ * Log tab for processing history and errors (shared by both books).
  */
 function ensureLogSheet_() {
   const sh = getOrCreateSheet_(CONFIG.SHEET_LOG);
   if (sh.getLastRow() === 0) {
-    sh.getRange(1, 1, 1, 4).setValues([['Timestamp', 'Level', 'File / Context', 'Message']])
+    sh.getRange(1, 1, 1, 4).setValues([['Timestamp', 'Level', 'Book: File / Context', 'Message']])
       .setFontWeight('bold').setBackground('#e8eaed');
     sh.setFrozenRows(1);
-    sh.setColumnWidth(1, 150); sh.setColumnWidth(3, 280); sh.setColumnWidth(4, 520);
+    sh.setColumnWidth(1, 150); sh.setColumnWidth(3, 300); sh.setColumnWidth(4, 520);
     sh.getRange('A2:A').setNumberFormat('yyyy-mm-dd hh:mm:ss');
   }
 }
 
+/**
+ * Puts tabs in a sensible order and removes the blank starter "Sheet1".
+ */
+function arrangeTabs_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const work = getBook_('work'), home = getBook_('home');
+  const order = [work.expensesSheet, home.expensesSheet, CONFIG.SHEET_SUMMARY,
+                 work.categoriesSheet, home.categoriesSheet, CONFIG.SHEET_SETTINGS, CONFIG.SHEET_LOG];
+  order.forEach((name, i) => {
+    const sh = ss.getSheetByName(name);
+    if (sh) { ss.setActiveSheet(sh); ss.moveActiveSheet(i + 1); }
+  });
+  const starter = ss.getSheetByName('Sheet1');
+  if (starter && starter.getLastRow() === 0 && ss.getSheets().length > 1) ss.deleteSheet(starter);
+  ss.setActiveSheet(ss.getSheetByName(work.expensesSheet));
+}
+
 /* ============================================================================
- * Summary tab (budget tracking)
+ * Work Summary tab (budget tracking, Work book only)
  * ========================================================================== */
 
 /**
- * (Re)builds the Summary tab: monthly budget vs. actual per category,
+ * (Re)builds the Work Summary tab: monthly budget vs. actual per category,
  * reimbursement totals, and a month-by-category history table.
- * Re-run after adding categories.
+ * Re-run after adding Work categories.
  */
 function buildSummarySheet_() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const book = getBook_('work');
   const sh = getOrCreateSheet_(CONFIG.SHEET_SUMMARY);
   sh.clear();
   sh.getRange('A:Z').clearDataValidations();
 
-  const E = "'" + CONFIG.SHEET_EXPENSES + "'!";
-  const L = k => colLetter_(col_(k));
+  const E = "'" + book.expensesSheet + "'!";
+  const L = k => colLetter_(col_(book, k));
   const colRef = k => E + L(k) + ':' + L(k);
   const total = colRef('total'), date = colRef('date'), cat = colRef('category');
   const type = colRef('type'), status = colRef('status');
@@ -371,18 +403,20 @@ function buildSummarySheet_() {
   const startRow = 6;
   sh.getRange(startRow, 1, 1, 5)
     .setValues([['Category', 'Monthly Budget', 'Spent', 'Remaining', '% Used']])
-    .setFontWeight('bold').setBackground('#1f3864').setFontColor('#ffffff');
+    .setFontWeight('bold').setBackground(book.headerColor).setFontColor('#ffffff');
 
-  const catSheet = ss.getSheetByName(CONFIG.SHEET_CATEGORIES);
+  const catSheet = ss.getSheetByName(book.categoriesSheet);
   const cats = catSheet.getLastRow() > 1
     ? catSheet.getRange(2, 1, catSheet.getLastRow() - 1, 1).getValues().map(r => r[0]).filter(String)
     : [];
 
-  const C = "'" + CONFIG.SHEET_CATEGORIES + "'!A:C";
+  // Budget column position on the Categories tab, looked up by key
+  const budgetIdx = book.categoryColumns.findIndex(c => c.key === 'budget') + 1;
+  const C = "'" + book.categoriesSheet + "'!A:" + colLetter_(budgetIdx);
   const rows = cats.map((c, i) => {
     const r = startRow + 1 + i;
     // Look the budget up by name so reordering the Categories tab is harmless
-    const look = `IFERROR(VLOOKUP(A${r},${C},3,FALSE),"")`;
+    const look = `IFERROR(VLOOKUP(A${r},${C},${budgetIdx},FALSE),"")`;
     return [
       c,
       `=IF(${look}="","",${look})`,
@@ -419,7 +453,7 @@ function buildSummarySheet_() {
   const histRow = totalRow + 3;
   sh.getRange(histRow - 1, 1).setValue('Monthly history (all months)').setFontWeight('bold');
   const D = L('date'), F = L('category'), J = L('total');
-  const lastLetter = colLetter_(COLUMNS.length);
+  const lastLetter = colLetter_(book.columns.length);
   sh.getRange(histRow, 1).setFormula(
     `=IFERROR(QUERY(${E}A1:${lastLetter}, ` +
     `"select year(${D}), month(${D})+1, sum(${J}) where ${D} is not null and ${J} is not null ` +
@@ -437,7 +471,7 @@ function buildSummarySheet_() {
  * ========================================================================== */
 
 /**
- * Installs the time-driven trigger that processes the Inbox.
+ * Installs the time-driven trigger that processes both Inboxes.
  * @param {boolean=} silent - skip the confirmation alert (used by setup)
  */
 function installTrigger(silent) {

@@ -1,27 +1,30 @@
 /**
  * ============================================================================
- * Config.gs — Receipt Tracker constants, column map, and shared helpers
+ * Config.gs — Receipt Tracker constants and shared helpers
  * ----------------------------------------------------------------------------
  * Created:  2026-10-30
+ * Updated:  2026-11-02  v2.0 — Work/Home books, original-copy archive
  * Author:   Allen McIntosh (with Claude)
  *
- * Everything that rarely changes lives here. Things you are likely to tweak
- * (email recipient, send mode, model name, default purpose) live on the
- * "Settings" sheet instead so you never have to edit code for them.
+ * Generic constants and utilities used by every file. The Work and Home
+ * "books" (their columns, categories, folders, and statuses) are defined in
+ * Books.gs. Values you are likely to tweak (email recipient, send mode, model
+ * name, default purpose) live on the "Settings" sheet so you never have to
+ * edit code for them.
  * ============================================================================
  */
 
 const CONFIG = {
-  // Drive folder names (created by Setup under My Drive)
-  ROOT_FOLDER_NAME: 'Expense Receipts',
+  // Top-level Drive folder (created under My Drive). Each book gets its own
+  // subfolder with Inbox / Processed / Needs Attention / Originals inside.
+  ROOT_FOLDER_NAME: 'Receipts',
   INBOX_FOLDER_NAME: 'Inbox',
   PROCESSED_FOLDER_NAME: 'Processed',
   ATTENTION_FOLDER_NAME: 'Needs Attention',
+  ORIGINALS_FOLDER_NAME: 'Originals',
 
-  // Sheet (tab) names
-  SHEET_EXPENSES: 'Expenses',
-  SHEET_CATEGORIES: 'Categories',
-  SHEET_SUMMARY: 'Summary',
+  // Shared sheet (tab) names. Per-book tabs are named in Books.gs.
+  SHEET_SUMMARY: 'Work Summary',
   SHEET_SETTINGS: 'Settings',
   SHEET_LOG: 'Log',
 
@@ -43,13 +46,12 @@ const CONFIG = {
     'image/webp', 'image/heic', 'image/heif'
   ],
 
-  // Script Properties keys
+  // Script Properties keys. Per-book folder IDs and counters are built from
+  // these prefixes plus the book key, e.g. FOLDER_WORK_INBOX_ID, COUNTER_W.
   PROP_API_KEY: 'GEMINI_API_KEY',
   PROP_ROOT_ID: 'FOLDER_ROOT_ID',
-  PROP_INBOX_ID: 'FOLDER_INBOX_ID',
-  PROP_PROCESSED_ID: 'FOLDER_PROCESSED_ID',
-  PROP_ATTENTION_ID: 'FOLDER_ATTENTION_ID',
-  PROP_COUNTER: 'RECEIPT_COUNTER'
+  PROP_FOLDER_PREFIX: 'FOLDER_',
+  PROP_COUNTER_PREFIX: 'COUNTER_'
 };
 
 /* ----------------------------------------------------------------------------
@@ -61,53 +63,54 @@ const TYPES = {
 };
 
 const STATUS = {
-  NEEDS_REVIEW: 'Needs Review',  // extraction failed or looked shaky
-  UNSUBMITTED: 'Unsubmitted',    // reimbursable, not yet sent
-  SUBMITTED: 'Submitted',        // included in a reimbursement email
-  REIMBURSED: 'Reimbursed',      // money received
-  REJECTED: 'Rejected',          // reimbursement denied
-  TRACKED: 'Tracked'             // track-only expense, nothing to do
+  NEEDS_REVIEW: 'Needs Review',  // extraction failed or looked shaky (both books)
+  UNSUBMITTED: 'Unsubmitted',    // Work: reimbursable, not yet sent
+  SUBMITTED: 'Submitted',        // Work: included in a reimbursement email
+  REIMBURSED: 'Reimbursed',      // Work: money received
+  REJECTED: 'Rejected',          // Work: reimbursement denied
+  TRACKED: 'Tracked',            // Work: track-only expense, nothing to do
+  RECORDED: 'Recorded'           // Home: stored and read cleanly
 };
 
-/* ----------------------------------------------------------------------------
- * Expenses sheet column map. Order here = column order on the sheet.
- * Code always looks columns up by key, so you can reorder this list (before
- * first setup) without touching any other file.
- * ------------------------------------------------------------------------- */
-const COLUMNS = [
-  { key: 'select',    header: 'Select',           width: 60 },
-  { key: 'id',        header: 'Receipt ID',       width: 105 },
-  { key: 'added',     header: 'Added',            width: 130 },
-  { key: 'date',      header: 'Receipt Date',     width: 100 },
-  { key: 'vendor',    header: 'Vendor',           width: 180 },
-  { key: 'category',  header: 'Category',         width: 150 },
-  { key: 'type',      header: 'Type',             width: 110 },
-  { key: 'subtotal',  header: 'Subtotal',         width: 90 },
-  { key: 'tax',       header: 'Tax',              width: 75 },
-  { key: 'total',     header: 'Total',            width: 90 },
-  { key: 'payment',   header: 'Card (last 4)',    width: 90 },
-  { key: 'gallons',   header: 'Gallons',          width: 75 },
-  { key: 'ppg',       header: 'Price / Gal',      width: 85 },
-  { key: 'purpose',   header: 'Business Purpose', width: 220 },
-  { key: 'site',      header: 'Site / Project',   width: 130 },
-  { key: 'status',    header: 'Status',           width: 115 },
-  { key: 'submitted', header: 'Submitted On',     width: 100 },
-  { key: 'batch',     header: 'Batch ID',         width: 135 },
-  { key: 'receipt',   header: 'Receipt',          width: 70 },
-  { key: 'items',     header: 'Items / Summary',  width: 260 },
-  { key: 'notes',     header: 'Extraction Notes', width: 260 },
-  { key: 'fileId',    header: 'File ID',          width: 120 }
-];
+/** Background colors for each status (conditional formatting). */
+const STATUS_COLORS = {
+  'Needs Review': '#f4cccc',
+  'Unsubmitted': '#fff2cc',
+  'Submitted': '#cfe2f3',
+  'Reimbursed': '#d9ead3',
+  'Rejected': '#e6b8af',
+  'Tracked': '#eeeeee',
+  'Recorded': '#eeeeee'
+};
+
+/* ============================================================================
+ * Column lookup (per book)
+ * ========================================================================== */
 
 /**
- * Returns the 1-based column number for a column key.
- * @param {string} key - key from COLUMNS
+ * Returns the 1-based column number for a column key in a book's sheet.
+ * @param {Object} book - from getBook_()
+ * @param {string} key  - key from book.columns
  * @return {number}
  */
-function col_(key) {
-  const idx = COLUMNS.findIndex(c => c.key === key);
-  if (idx < 0) throw new Error('Unknown column key: ' + key);
-  return idx + 1;
+function col_(book, key) {
+  if (!book.colIndex_) {
+    book.colIndex_ = {};
+    book.columns.forEach((c, i) => { book.colIndex_[c.key] = i + 1; });
+  }
+  const n = book.colIndex_[key];
+  if (!n) throw new Error('Unknown column "' + key + '" in ' + book.label + ' book');
+  return n;
+}
+
+/**
+ * True if the book's sheet has a column with this key.
+ * @param {Object} book
+ * @param {string} key
+ * @return {boolean}
+ */
+function hasCol_(book, key) {
+  return book.columns.some(c => c.key === key);
 }
 
 /**
@@ -123,6 +126,18 @@ function colLetter_(n) {
     n = Math.floor((n - 1) / 26);
   }
   return s;
+}
+
+/**
+ * Turns a sheet row array into a {key: value} object for a book.
+ * @param {Object} book
+ * @param {Array} row
+ * @return {Object}
+ */
+function rowToObject_(book, row) {
+  const o = {};
+  book.columns.forEach((c, i) => { o[c.key] = row[i]; });
+  return o;
 }
 
 /* ============================================================================
@@ -148,6 +163,16 @@ function getSetting_(key) {
     }
   }
   return SETTINGS_CACHE_[key] || '';
+}
+
+/**
+ * Reads a Yes/No setting. Anything other than "No" counts as Yes, so a
+ * missing or mistyped value falls back to the safer default.
+ * @param {string} key
+ * @return {boolean}
+ */
+function settingIsYes_(key) {
+  return getSetting_(key).toLowerCase() !== 'no';
 }
 
 /* ============================================================================
@@ -189,15 +214,15 @@ function money_(n) {
 
 /**
  * Writes a line to the Log sheet (and Logger). Never throws.
- * @param {string} level - INFO | WARN | ERROR
- * @param {string} file  - file name or context
+ * @param {string} level   - INFO | WARN | ERROR
+ * @param {string} context - book + file name, or other context
  * @param {string} message
  */
-function logEvent_(level, file, message) {
+function logEvent_(level, context, message) {
   try {
-    Logger.log(`[${level}] ${file}: ${message}`);
+    Logger.log(`[${level}] ${context}: ${message}`);
     const sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.SHEET_LOG);
-    if (sh) sh.appendRow([new Date(), level, safeText_(file), safeText_(message)]);
+    if (sh) sh.appendRow([new Date(), level, safeText_(context), safeText_(message)]);
   } catch (e) {
     Logger.log('Log write failed: ' + e);
   }

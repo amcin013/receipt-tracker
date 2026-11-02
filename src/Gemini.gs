@@ -3,12 +3,14 @@
  * Gemini.gs — Receipt data extraction via the Gemini API
  * ----------------------------------------------------------------------------
  * Created:  2026-10-30
+ * Updated:  2026-11-02  v2.0 — prompt includes the book (Work/Home) context
  * Author:   Allen McIntosh (with Claude)
  *
  * Sends the receipt image/PDF inline to Gemini with a strict JSON response
  * schema, so the reply is machine-readable fields rather than free text.
- * The category list comes from the Categories tab and is passed as an enum,
- * so Gemini can only answer with one of your categories.
+ * The category list comes from the book's Categories tab (Work or Home) and
+ * is passed as an enum, so Gemini can only answer with one of that book's
+ * categories.
  * ============================================================================
  */
 
@@ -33,11 +35,12 @@ class ExtractionError extends Error {
 /**
  * Extracts structured fields from a receipt file.
  * @param {Blob} blob - receipt image or PDF
- * @param {{name: string, description: string}[]} categories
+ * @param {{name: string, description: string}[]} categories - the book's categories
+ * @param {string=} bookContext - one sentence describing the book (Work/Home)
  * @return {Object} parsed receipt fields (see buildReceiptSchema_)
  * @throws {ExtractionError}
  */
-function extractReceiptData_(blob, categories) {
+function extractReceiptData_(blob, categories, bookContext) {
   const apiKey = PropertiesService.getScriptProperties().getProperty(CONFIG.PROP_API_KEY);
   if (!apiKey) throw new ExtractionError('Gemini API key is not set.', true, true);
 
@@ -48,7 +51,7 @@ function extractReceiptData_(blob, categories) {
     contents: [{
       role: 'user',
       parts: [
-        { text: buildPrompt_(categories) },
+        { text: buildPrompt_(categories, bookContext) },
         { inlineData: { mimeType: blob.getContentType(), data: Utilities.base64Encode(blob.getBytes()) } }
       ]
     }],
@@ -97,12 +100,14 @@ function extractReceiptData_(blob, categories) {
 /**
  * Builds the instruction text sent alongside the receipt.
  * @param {{name: string, description: string}[]} categories
+ * @param {string=} bookContext
  * @return {string}
  */
-function buildPrompt_(categories) {
+function buildPrompt_(categories, bookContext) {
   const catList = categories.map(c => `- ${c.name}: ${c.description || ''}`).join('\n');
   return [
     'You are extracting data from a purchase receipt, invoice, or order confirmation for an expense tracker.',
+    bookContext || '',
     'Return only what is printed on the document. Never guess a number; use null if a value is missing or unreadable.',
     '',
     'Rules:',
