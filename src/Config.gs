@@ -169,7 +169,9 @@ function getSetting_(key) {
     const sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.SHEET_SETTINGS);
     if (sh && sh.getLastRow() > 1) {
       sh.getRange(2, 1, sh.getLastRow() - 1, 2).getValues().forEach(r => {
-        if (r[0]) SETTINGS_CACHE_[String(r[0]).trim()] = String(r[1]).trim();
+        // First occurrence wins, matching how setup de-duplicates keys
+        const k = String(r[0]).trim();
+        if (k && !(k in SETTINGS_CACHE_)) SETTINGS_CACHE_[k] = String(r[1]).trim();
       });
     }
   }
