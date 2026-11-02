@@ -67,10 +67,30 @@ function onOpen() {
 
 /**
  * Creates folders, sheets, validation, summary, and the processing trigger.
- * Safe to re-run.
+ * Safe to re-run. Holds the script lock so two overlapping runs (e.g., the
+ * menu clicked again while the first run is still going after the
+ * authorization prompt) can't both create folders or settings rows.
  */
 function runSetup() {
   const ui = SpreadsheetApp.getUi();
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(5 * 1000)) {
+    ui.alert('Setup is already running', 'Another setup or processing run is in progress. ' +
+      'Wait a minute, then run setup again only if the tabs or folders are missing.', ui.ButtonSet.OK);
+    return;
+  }
+  try {
+    runSetupLocked_(ui);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/**
+ * The body of runSetup, run while the script lock is held.
+ * @param {Ui} ui
+ */
+function runSetupLocked_(ui) {
   const folders = ensureFolders_();
   ensureSettingsSheet_();
   getBooks_().forEach(book => {
@@ -229,6 +249,7 @@ function ensureSettingsSheet_() {
     sh.setFrozenRows(1);
     sh.setColumnWidth(1, 200); sh.setColumnWidth(2, 280); sh.setColumnWidth(3, 520);
   }
+  removeDuplicateSettings_(sh);
   const existing = sh.getLastRow() > 1
     ? sh.getRange(2, 1, sh.getLastRow() - 1, 1).getValues().map(r => String(r[0]).trim())
     : [];
@@ -247,6 +268,31 @@ function ensureSettingsSheet_() {
   setList('Require Business Purpose', ['Yes', 'No']);
   setList('Keep Original Copies', ['Yes', 'No']);
   SETTINGS_CACHE_ = null;
+}
+
+/**
+ * Deletes repeated keys on the Settings tab, keeping the first row for each
+ * key. If the first row's value is blank but a later copy has one, that value
+ * is moved up so nothing you typed is lost.
+ * @param {Sheet} sh
+ */
+function removeDuplicateSettings_(sh) {
+  if (sh.getLastRow() < 3) return;
+  const data = sh.getRange(2, 1, sh.getLastRow() - 1, 2).getValues();
+  const firstRow = {};   // key -> sheet row of first occurrence
+  const toDelete = [];
+  data.forEach((r, i) => {
+    const key = String(r[0]).trim();
+    const row = i + 2;
+    if (!key) return;
+    if (!(key in firstRow)) { firstRow[key] = row; return; }
+    const keep = sh.getRange(firstRow[key], 2);
+    if (String(keep.getValue()).trim() === '' && String(r[1]).trim() !== '') keep.setValue(r[1]);
+    toDelete.push(row);
+  });
+  // Delete bottom-up so earlier row numbers stay valid
+  toDelete.reverse().forEach(row => sh.deleteRow(row));
+  if (toDelete.length) logEvent_('INFO', 'Setup', `Removed ${toDelete.length} duplicate Settings row(s).`);
 }
 
 /**

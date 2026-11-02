@@ -79,7 +79,7 @@ My Drive/
 3. **Add the code.** Go to **Extensions > Apps Script**. Delete the starter `Code.gs` and create six script files named `Config`, `Books`, `Setup`, `Gemini`, `Processor`, and `Reimbursement`, pasting in the matching files from `src/`. File order doesn't matter.
    To edit the manifest, open **Project Settings (gear) > Show "appsscript.json" manifest file in editor**, then paste in `src/appsscript.json`. Save.
 4. **Reload the sheet.** An **Expenses** menu appears.
-5. **Run setup.** Go to **Expenses > Setup > Run first-time setup** and approve the permissions prompt (Drive, Sheets, Gmail, external requests). Setup creates the folders and tabs above and a trigger that checks both Inboxes every 10 minutes.
+5. **Run setup.** Go to **Expenses > Setup > Run first-time setup** and approve the permissions prompt (Drive, Sheets, Gmail, external requests). After you approve, setup keeps running in the background. Wait for the **Setup complete** popup (up to a minute) before clicking anything else. Setup creates the folders and tabs above and a trigger that checks both Inboxes every 10 minutes.
 6. **Get a Gemini API key.** Go to aistudio.google.com, then **Get API key**. Paste it in via **Expenses > Setup > Set Gemini API key**. It's stored in Script Properties, not on a sheet.
 7. **Fill in the Settings tab.** At minimum, set **Your Name** and **Reimbursement Email To**.
 8. **Bookmark both Inboxes on your phone.** **Expenses > Open Inbox folders** shows both links.
@@ -237,6 +237,7 @@ The Home Expenses tab is a plain table (one row per receipt, fixed headers), so 
 
 ## Changelog
 
+- **2026-11-02**: v2.0.2. Setup holds a lock so overlapping runs can't duplicate anything, and it removes duplicate Settings rows left by earlier runs. When a key appears twice, the first row now wins.
 - **2026-11-02**: v2.0.1 (docs). Default workflow is now: email the batch to your own LHI inbox, then forward it. The alias is optional.
 - **2026-11-02**: v2.0. Separate Work and Home books (own Inbox, folders, tabs, categories, and ID series), with the Inbox deciding the book. Untouched originals archived per book. Runs from your personal Google account. Duplicate check spans both books. Optional Send From Alias for reimbursement emails. Each row is now written before its file is moved; a file seen again is filed by its existing row's book and status, and a file already recorded in the other book is surfaced in Needs Attention instead of filed silently. Extraction notes are guarded against formula injection.
 - **2026-10-30**: v1.0. Initial build: Drive inbox processing, Gemini extraction, budget summary, reimbursement email batching.
